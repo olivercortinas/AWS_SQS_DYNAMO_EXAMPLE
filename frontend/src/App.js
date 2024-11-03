@@ -5,6 +5,7 @@ const App = () => {
   const [processMessage, setProcessMessage] = useState("");
   const [status, setStatus] = useState("");
   const [isLoading, setIsLoading] = useState(false);
+  const [messages, setMessages] = useState([]);
 
   const handleSendProcess = async () => {
     setIsLoading(true);
@@ -27,13 +28,14 @@ const App = () => {
   const handleCheckProcess = async () => {
     setIsLoading(true);
     try {
-      const response = await axios.get("http://localhost:3001/receive-process");
-      setStatus(response.data.status);
+      const response = await axios.get("http://localhost:3001/messages");
+      setMessages(response.data);
+      setStatus("Mensajes obtenidos correctamente");
     } catch (error) {
       if (error.response) {
         setStatus(error.response.data.error);
       } else {
-        setStatus("Error verificando el proceso");
+        setStatus("Error verificando los mensajes");
       }
     } finally {
       setIsLoading(false);
@@ -56,6 +58,13 @@ const App = () => {
         {isLoading ? "Verificando..." : "Verificar Procesos"}
       </button>
       <p>{status}</p>
+      <ul>
+        {messages.map((msg) => (
+          <li key={msg.messageId}>
+            {msg.body} - {msg.status}
+          </li>
+        ))}
+      </ul>
     </div>
   );
 };

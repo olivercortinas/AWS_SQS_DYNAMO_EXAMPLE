@@ -38,6 +38,16 @@ class SQSService {
     return data.Messages ? data.Messages[0] : null;
   }
 
+  async receiveMessages() {
+    const params = {
+      QueueUrl: this.queueUrl,
+      MaxNumberOfMessages: 10,
+      WaitTimeSeconds: 5,
+    };
+    const data = await this.sqsClient.send(new ReceiveMessageCommand(params));
+    return data.Messages || [];
+  }
+
   async deleteMessage(receiptHandle) {
     const params = {
       QueueUrl: this.queueUrl,

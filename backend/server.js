@@ -1,49 +1,105 @@
-const express = require("express");
-const SQSService = require("./services/SQSService");
-const DynamoDBService = require("./services/DynamoDBService");
+const express = require('express');
+const SQSService = require('./services/SQSService');
+const { DynamoDBService } = require('./services/DynamoDBService');
 const cors = require('cors');
 const dotenv = require('dotenv');
+const bodyParser = require('body-parser');
+
 dotenv.config();
 
 const app = express();
-const port = 3001;
+const port = process.env.PORT || 3001;
+const interval = 5000; // Definir el intervalo en milisegundos
+
+// Inicializar instancias de servicios
+const sqsService = new SQSService(process.env.SQS_QUEUE_URL);
+const dynamoDBService = new DynamoDBService();
 
 app.use(cors());
-
-const sqsService = new SQSService(
-  process.env.SQS_QUEUE_URL
-);
-const dynamoDBService = new DynamoDBService(process.env.DYNAMODB_TABLE_NAME);
-
+app.use(bodyParser.json());
 app.use(express.json());
 
+// Endpoint para enviar un proceso a la cola de SQS y almacenarlo en DynamoDB con estado "PENDING"
 app.post("/send-process", async (req, res) => {
+  const { message } = req.body;
+  if (!message) {
+    return res.status(400).json({ error: "Falta el mensaje" });
+  }
   try {
-    const { message } = req.body;
+    // Enviar mensaje a SQS
+    console.log("Sending message to SQS", message);
     const result = await sqsService.sendMessage(message);
-    res.status(200).json({ status: "Enviado", messageId: result.MessageId });
+    const messageId = result.MessageId;
+
+    // Guardar mensaje en DynamoDB con estado "PENDING"
+    await dynamoDBService.saveMessage({
+      messageId,
+      body: message,
+      status: "PENDING",
+      timestamp: new Date().toISOString(),
+    });
+    console.log(`Message saved in DynamoDB: ${messageId}`);
+    res.status(200).json({ messageId });
   } catch (error) {
-    console.log(error);
+    console.error(error);
     res.status(500).json({ error: "Error enviando el proceso" });
   }
 });
 
+// Endpoint para recibir y procesar mensajes manualmente
 app.get("/receive-process", async (req, res) => {
   try {
+    console.log("Receiving message from SQS");
     const message = await sqsService.receiveMessage();
     if (message) {
-      await dynamoDBService.saveMessage(message.MessageId, message.Body);
+      // Actualizar estado en DynamoDB a "COMPLETED"
+      await dynamoDBService.updateMessageStatus(message.MessageId, "COMPLETED");
+      console.log(`Message processed: ${message.MessageId}`);
+      // Eliminar el mensaje de la cola
       await sqsService.deleteMessage(message.ReceiptHandle);
-      res.status(200).json({ status: "Procesado", message });
+      console.log(`Message deleted: ${message.MessageId}`);
+
+      res.status(200).json({ status: "Message processed successfully" });
     } else {
-      res.status(404).json({ status: "No hay procesos nuevos" });
+      res.status(200).json({ status: "No message to process" });
     }
   } catch (error) {
-    console.log(error);
-    res.status(500).json({ error: "Error recibiendo el proceso" });
+    console.error("Detailed error: ", error.message);
+    res.status(500).json({ error: "Error processing message" });
   }
 });
 
+// Endpoint para obtener todos los mensajes almacenados en DynamoDB
+app.get("/messages", async (req, res) => {
+  try {
+    const messages = await dynamoDBService.getAllMessages();
+    res.status(200).json(messages);
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({ error: "Error retrieving messages" });
+  }
+});
+
+// Procesar mensajes de SQS y actualizar su estado en DynamoDB
+const processMessages = async () => {
+  try {
+    const message = await sqsService.receiveMessage();
+    if (message) {
+      await dynamoDBService.updateMessageStatus(message.MessageId, "COMPLETED");
+      await sqsService.deleteMessage(message.ReceiptHandle);
+    }
+  } catch (error) {
+    console.error("Error processing messages", error);
+  }
+};
+
 app.listen(port, () => {
-  console.log(`Server running on http://localhost:${port}`);
+  console.log(`Server running on port ${port}`);
+
+  // Verificar si se debe procesar mensajes automáticamente
+  if (process.env.PROCESS_MESSAGES_AUTOMATICALLY === "true") {
+    // Set an interval to process messages every 5 seconds
+    // This ensures that messages are processed automatically at regular intervals
+    setInterval(processMessages, interval);
+  }
 });
